@@ -2,6 +2,8 @@
 
 namespace Outl1ne\NovaSettings\Http\Controllers;
 
+use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\Crypt;
 use Laravel\Nova\Panel;
 use Illuminate\Http\Request;
 use Laravel\Nova\ResolvesFields;
@@ -17,6 +19,7 @@ use Illuminate\Http\Resources\ConditionallyLoadsAttributes;
 class SettingsController extends Controller
 {
     use ResolvesFields, ConditionallyLoadsAttributes;
+    const ENCRYPTED_PLACEHOLDER = '**********';
 
     public function get(Request $request)
     {
@@ -30,6 +33,15 @@ class SettingsController extends Controller
         $addResolveCallback = function (&$field) {
             if (!empty($field->attribute)) {
                 $setting = NovaSettings::getSettingsModel()::firstOrNew(['key' => $field->attribute]);
+                if (strpos($field->attribute, 'encrypted_') === 0) {
+                    $key = substr_replace($field->attribute, '', 0, 10);
+                    try {
+                        Crypt::decrypt(setting($key));
+                        $setting->value = self::ENCRYPTED_PLACEHOLDER;
+                    } catch (DecryptException $e) {
+                        $setting->value = setting($key);
+                    }
+                }
                 $fakeResource = $this->makeFakeResource($field->attribute, isset($setting) ? $setting->value : '');
                 $field->resolve($fakeResource);
             }
@@ -84,12 +96,22 @@ class SettingsController extends Controller
             // For nova-translatable support
             if (!empty($field->meta['translatable']['original_attribute'])) $field->attribute = $field->meta['translatable']['original_attribute'];
 
-            $existingRow = $settingsClass::where('key', $field->attribute)->first();
-
             $tempResource = new \Laravel\Nova\Support\Fluent;
             $field->fill($request, $tempResource);
 
             if (!array_key_exists($field->attribute, $tempResource->getAttributes())) return;
+
+            if (strpos($field->attribute, 'encrypted_') === 0) {
+                $value = $tempResource->{$field->attribute};
+                $field->attribute = substr_replace($field->attribute, '', 0, 10);
+                if ($value == self::ENCRYPTED_PLACEHOLDER) {
+                    $tempResource->{$field->attribute} = setting($field->attribute);
+                } else {
+                    $tempResource->{$field->attribute} = Crypt::encrypt($value);
+                }
+            }
+
+            $existingRow = $settingsClass::where('key', $field->attribute)->first();
 
             if (isset($existingRow)) {
                 $existingRow->value = $tempResource->{$field->attribute};
@@ -101,6 +123,10 @@ class SettingsController extends Controller
                 $newRow->save();
             }
         });
+
+        if (config('nova-settings.restart_queue', false)) {
+            Artisan::call('queue:restart');
+        }
 
         if (config('nova-settings.reload_page_on_save', false) === true) {
             return response()->json(['reload' => true]);
