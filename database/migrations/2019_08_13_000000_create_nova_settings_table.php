@@ -15,10 +15,12 @@ return new class extends Migration
     public function up()
     {
         // Settings table
-        Schema::create(NovaSettings::getSettingsTableName(), function (Blueprint $table) {
-            $table->string('key')->unique()->primary();
-            $table->text('value')->nullable();
-        });
+        if (!Schema::hasTable(NovaSettings::getSettingsTableName())) {
+            Schema::create(NovaSettings::getSettingsTableName(), function (Blueprint $table) {
+                $table->string('key')->unique()->primary();
+                $table->text('value')->nullable();
+            });
+        }
     }
 
     /**
